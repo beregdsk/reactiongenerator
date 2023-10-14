@@ -26,8 +26,8 @@ class ReactionGenerator:
         
         self.basis = [self.str_to_vec(*species_to_solve)] + \
             [self.str_to_vec(r.split('_')[-2], 
-                reference.self.hybridization_1[r] if self.hybridization else None) 
-                for r in reference.reference.keys()]
+                ref[r] if self.hybridization else None) 
+                for r in ref.keys()]
 
     def str_to_vec(self, s, hyb=None):
         r_vec = zeros(self.dim, 1)
