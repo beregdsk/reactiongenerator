@@ -1,67 +1,61 @@
-import re
-from sympy import QQ
+from math import lcm
+from sympy import QQ, sign
 from sympy.polys.matrices import DomainMatrix
 from itertools import groupby
+from rdkit import Chem
+from rdkit.Chem import rdqueries
 
 import reference
 
 class ReactionGenerator:
-    def __init__(self, species_to_solve, ref, hyb=False):
-        self.species_to_solve = species_to_solve
-        self.hybridization = hyb
+    def __init__(self, species_to_solve, smi, isodesmic=True):
+        self.isodesmic = isodesmic
+        self.smiles = [species_to_solve] + [s for s in smi.values() if s != '']
+        self.mols = {s:Chem.AddHs(Chem.MolFromSmiles(s)) for s in self.smiles}
         
-        self.re_elems = re.compile(r'([A-Z]+?)(?=\d+)?')
-        self.re_with_counts = re.compile(r'([A-Z]+?)(\d+)?')
-        elements = sorted(set([e for r in reference.reference.keys() 
-                          for e in self.re_elems.findall(r.split('_')[-2]) 
-                          if not (self.hybridization and 'C' in e)]))
-        self.elem_num = {el:i for i, el in enumerate(elements)}
+        atomic_nums = sorted(set([atom.GetAtomicNum() for mol in self.mols.values() 
+                                for atom in mol.GetAtoms()]), reverse=True)
+        self.elem_num = {el:i for i, el in enumerate(atomic_nums)}
+        self.bonds = [Chem.MolFromSmarts(s) for s in ('[C]-[H]', '[C]-[C]', '[C]=[C]', '[C]#[C]', '[C]:[C]')]
+
+        self.dim = len(self.elem_num) + (len(self.bonds) if isodesmic else 0)
         
-        if hyb: self.elem_num.update({f'C{i}':len(self.elem_num)+i for i in range(4)})
+        self.basis = [self.smi_to_vec(s) for s in self.smiles]
 
-        self.num_elem = dict(map(reversed, self.elem_num.items()))
-
-        self.dim = len(self.elem_num)
-        
-        self.basis = [self.str_to_vec(*species_to_solve)] + \
-            [self.str_to_vec(r.split('_')[-2], 
-                ref[r] if self.hybridization else None) 
-                for r in ref.keys()]
-
-    def str_to_vec(self, s, hyb=None):
+    def smi_to_vec(self, s):
         r_vec = [0]*self.dim
-        for el, n in self.re_with_counts.findall(s):
-            if self.hybridization and el=='C':
-                for i, c in enumerate(hyb):
-                    r_vec[self.elem_num[f'C{i}']] = int(c)
-            else:
-                r_vec[self.elem_num[el]] = int(n) if n else 1
+        
+        for el, i in self.elem_num.items():
+            q = rdqueries.AtomNumEqualsQueryAtom(el)
+            r_vec[i] = len(self.mols[s].GetAtomsMatchingQuery(q))
+
+        if self.isodesmic:
+            for i, b in enumerate(self.bonds):
+                r_vec[len(self.elem_num)+i] = len(self.mols[s].GetSubstructMatches(b))
+
         return r_vec
 
     @staticmethod
     def minimal_nullspace(A):
         n = A.to_field().nullspace().to_Matrix()
         found = n.shape[0]>=1
-        #print(A.to_Matrix())
+        
         return (n if n.shape[0]==1 and not 0 in n else None), found
 
-    def generate(self, fraction=None):
-        if fraction is not None:
-            start = int(fraction[0]/fraction[1]*(len(self.basis)-1) + 1)
-            end = int((fraction[0]+1)/fraction[1]*(len(self.basis)-1) + 1)
-        else:
-            start = 1
-            end = len(self.basis)
+    def generate(self, fraction=(0,1), max_found=1000):
+        start = int(fraction[0]/fraction[1]*(len(self.basis)-1) + 1)
+        end = int((fraction[0]+1)/fraction[1]*(len(self.basis)-1) + 1)
         
         S = []
         vec_nums = [0, start]
-        while len(vec_nums) > 1 and vec_nums[1] < end:
+        while len(vec_nums) > 1 and vec_nums[1] < end and len(S) < max_found/fraction[1]:
             A = DomainMatrix.from_list([self.basis[k] for k in vec_nums], QQ).transpose()
             n, found = self.minimal_nullspace(A)
 
             if found:
                 if n is not None:
-                    S.append([vec_nums.copy(), n/n[0]])
+                    l = lcm(*(a.q for a in n))
+                    S.append([vec_nums.copy(), n*l*sign(n[0])])
 
                 last = vec_nums.pop()
                 if last+1 >= len(self.basis):
@@ -89,14 +83,9 @@ class ReactionGenerator:
     def vector_to_str(self, v):
         s = ''
 
-        if self.hybridization:
-            c_sum = sum(v[n] for (e, n) in self.elem_num.items() if 'C' in e)
-            if c_sum > 0:
-                s += ''.join(f'C{self.coef_to_str(c_sum)}')
-
-        for i in range(self.dim):
-            if (self.hybridization and 'C' in self.num_elem[i]): continue 
-            if v[i] > 0: s += ''.join(f'{self.num_elem[i]}{self.coef_to_str(v[i])}')
+        pt = Chem.GetPeriodicTable()
+        for el, i in self.elem_num.items():
+            if v[i] > 0: s += ''.join(f'{pt.GetElementSymbol(el)}{self.coef_to_str(v[i])}')
         return s
 
     def reaction_to_str(self, rxn, cfs):
@@ -115,13 +104,62 @@ class ReactionGenerator:
                 for (r, c) in products)
 
         return s
+    
+    def reaction_to_smi(self, rxn, cfs):
+        reagents = [[r, c] for (r, c) in zip(rxn, cfs) if c>0]
+        products = [[r, c] for (r, c) in zip(rxn, cfs) if c<0]
 
-    @staticmethod
-    def is_integer_vec(v):
-        for i in range(1,len(v)):
-            if not v[i].is_integer:
-                return False
-        return True
+        s = ''
+        s += '+'.join(
+                '*'.join(
+                    filter(None, [self.coef_to_str(c), self.smiles[r]])) 
+                for (r, c) in reagents)
+        s += '->'
+        s += '+'.join(
+                '*'.join(
+                    filter(None, [self.coef_to_str(-c), self.smiles[r]])) 
+                for (r, c) in products)
+
+        return s
+    
+    def is_isodesmic(self, rxn, cfs):
+        smarts = ['[C]-[H]', '[C]-[C]', '[C]=[C]', '[C]#[C]', '[C]:[C]']
+        smarts_mols = [Chem.MolFromSmarts(s) for s in smarts]
+        t_s = [0]*len(smarts)
+        for r, c in zip(rxn, cfs):
+            mol = self.mols[self.smiles[r]]
+            for i, m in enumerate(smarts_mols):
+                t_s[i] += c*len(mol.GetSubstructMatches(m))
+
+        s = sum(abs(x) for x in t_s)
+        return s == 0
+    
+    def is_homodesmotic(self, rxn, cfs):
+        smarts = ['[^3]-[^3]', '[^2]-[^3]', '[^1]-[^3]', '[^2]-[^2]', '[^2]-[^1]', '[^1]-[^1]', '[^2]=[^2]', '[^2]:[^2]', '[^1]#[^1]',
+                '[C^3H3]', '[C^3H2]', '[C^3H]', '[C^3H0]', '[C^2H2]', '[C^2H]', '[C^2H0]', '[C^1H]', '[C^1H0]']
+        smarts_mols = [Chem.MolFromSmarts(s) for s in smarts]
+        t_s = [0]*len(smarts)
+        for r, c in zip(rxn, cfs):
+            mol = self.mols[self.smiles[r]]
+            for i, m in enumerate(smarts_mols):
+                t_s[i] += c*len(mol.GetSubstructMatches(m))
+
+        s = sum(abs(x) for x in t_s)
+        return s == 0
+    
+    def is_hypohomodesmotic(self, rxn, cfs):
+        smarts = ['[^3]', '[^2]', '[^1]',
+                '[C^3H3]', '[C^3H2]', '[C^3H]', '[C^3H0]', '[C^2H2]', '[C^2H]', '[C^2H0]', '[C^1H]', '[C^1H0]']
+        smarts_mols = [Chem.MolFromSmarts(s) for s in smarts]
+        t_s = [0]*len(smarts)
+        for r, c in zip(rxn, cfs):
+            mol = gen.mols[self.smiles[r]]
+            for i, m in enumerate(smarts_mols):
+                t_s[i] += c*len(mol.GetSubstructMatches(m))
+
+        s = sum(abs(x) for x in t_s)
+        return s == 0
+
 
 def sort_func(rxn):
     return sum(abs(rxn[1]))+abs(sum(rxn[1]))
@@ -129,9 +167,10 @@ def sort_func(rxn):
 if __name__ == '__main__':
     from multiprocessing import Pool
 
-    MP = False
+    MP = True
 
-    gen = ReactionGenerator(('C18H14', (0,16,2)), reference.hybridization, False)
+    gen = ReactionGenerator('c1cc2cccc3c2c4c1cccc4cc3', reference.smiles, True)
+
     if MP:
         rxns = []
 
@@ -142,13 +181,11 @@ if __name__ == '__main__':
     else:
         rxns = gen.generate()
 
-    int_rxns = list(filter(lambda rxn: gen.is_integer_vec(rxn[1]), rxns))
-    int_rxns = sorted(int_rxns, key=sort_func)
+    rxns = sorted(rxns, key=sort_func)
+    layers = [list(g[1]) for g in groupby(rxns, sort_func)]
 
-    layers = [list(g[1]) for g in groupby(int_rxns, sort_func)]
-
-    print(f'Reactions found: {len(rxns)}, integer: {len(int_rxns)}')
+    print(f'Reactions found: {len(rxns)}')
     input()
-    for i in range(len(layers)):
+    for i in range(int(len(layers)/10)):
         print(f'Layer {i+1}:')
         print(*(gen.reaction_to_str(*rxn) for rxn in layers[i]), sep='\n')
