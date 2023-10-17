@@ -12,7 +12,7 @@ class ReactionGenerator:
         
         self.re_elems = re.compile(r'([A-Z]+?)(?=\d+)?')
         self.re_with_counts = re.compile(r'([A-Z]+?)(\d+)?')
-        elements = sorted(set([e for r in reference.reference.keys() 
+        elements = sorted(set([e for r in ref.keys() 
                           for e in self.re_elems.findall(r.split('_')[-2]) 
                           if not (self.hybridization and 'C' in e)]))
         self.elem_num = {el:i for i, el in enumerate(elements)}
@@ -42,7 +42,7 @@ class ReactionGenerator:
     def minimal_nullspace(A):
         n = A.to_field().nullspace().to_Matrix()
         found = n.shape[0]>=1
-        #print(A.to_Matrix())
+        
         return (n if n.shape[0]==1 and not 0 in n else None), found
 
     def generate(self, fraction=None):
