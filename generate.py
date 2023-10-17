@@ -1,8 +1,7 @@
 import re
-from sympy import Matrix, zeros
+from sympy import QQ
 from sympy.polys.matrices import DomainMatrix
 from itertools import groupby
-from collections import deque
 
 import reference
 
@@ -30,7 +29,7 @@ class ReactionGenerator:
                 for r in ref.keys()]
 
     def str_to_vec(self, s, hyb=None):
-        r_vec = zeros(self.dim, 1)
+        r_vec = [0]*self.dim
         for el, n in self.re_with_counts.findall(s):
             if self.hybridization and el=='C':
                 for i, c in enumerate(hyb):
@@ -43,32 +42,43 @@ class ReactionGenerator:
     def minimal_nullspace(A):
         n = A.to_field().nullspace().to_Matrix()
         found = n.shape[0]>=1
-
+        #print(A.to_Matrix())
         return (n if n.shape[0]==1 and not 0 in n else None), found
 
-    def generate(self):
+    def generate(self, fraction=None):
+        if fraction is not None:
+            start = int(fraction[0]/fraction[1]*(len(self.basis)-1) + 1)
+            end = int((fraction[0]+1)/fraction[1]*(len(self.basis)-1) + 1)
+        else:
+            start = 1
+            end = len(self.basis)
+        
         S = []
-        vec_nums = deque([0, 1])
-        i = len(vec_nums)
-        while len(vec_nums) > 1:
-            A = DomainMatrix.from_Matrix(Matrix.hstack(*([self.basis[k] for k in vec_nums])))
+        vec_nums = [0, start]
+        while len(vec_nums) > 1 and vec_nums[1] < end:
+            A = DomainMatrix.from_list([self.basis[k] for k in vec_nums], QQ).transpose()
             n, found = self.minimal_nullspace(A)
 
             if found:
                 if n is not None:
                     S.append([vec_nums.copy(), n/n[0]])
-                vec_nums.pop()
 
-            if i < len(self.basis): 
-                vec_nums.append(i)
+                last = vec_nums.pop()
+                if last+1 >= len(self.basis):
+                    last = vec_nums.pop()
+                vec_nums.append(last+1)
             else:
-                while vec_nums[-1]>=len(self.basis) and len(vec_nums)>1:
-                    vec_nums.pop()
-                i = vec_nums.pop() + 1
-                if i < len(self.basis):
-                    vec_nums.append(i)
-
-            i += 1
+                if vec_nums[-1]+1 < len(self.basis):
+                    vec_nums.append(vec_nums[-1]+1)
+                else:
+                    last = vec_nums.pop()
+                    i = 1
+                    while last == len(self.basis)-i:
+                        if len(vec_nums) <= 1: 
+                            return S
+                        last = vec_nums.pop()
+                        i += 1
+                    vec_nums.append(last+1)
 
         return S
 
@@ -117,15 +127,28 @@ def sort_func(rxn):
     return sum(abs(rxn[1]))+abs(sum(rxn[1]))
 
 if __name__ == '__main__':
-    gen = ReactionGenerator(('C18H14', (0,0,16,2)), reference.hybridization)
+    from multiprocessing import Pool
 
-    rxns = gen.generate()
+    MP = False
+
+    gen = ReactionGenerator(('C18H14', (0,16,2)), reference.hybridization, False)
+    if MP:
+        rxns = []
+
+        n_proc = 4
+        with Pool(n_proc) as p:
+            for res in p.imap_unordered(gen.generate, ((i, n_proc) for i in range(n_proc))):
+                rxns.extend(res)
+    else:
+        rxns = gen.generate()
+
     int_rxns = list(filter(lambda rxn: gen.is_integer_vec(rxn[1]), rxns))
     int_rxns = sorted(int_rxns, key=sort_func)
 
     layers = [list(g[1]) for g in groupby(int_rxns, sort_func)]
 
     print(f'Reactions found: {len(rxns)}, integer: {len(int_rxns)}')
+    input()
     for i in range(len(layers)):
         print(f'Layer {i+1}:')
         print(*(gen.reaction_to_str(*rxn) for rxn in layers[i]), sep='\n')
