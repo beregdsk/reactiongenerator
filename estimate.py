@@ -1,4 +1,5 @@
 from multiprocessing import Pool
+from functools import partial
 
 from generate import ReactionGenerator
 import reference
@@ -69,7 +70,9 @@ class EnthalpyEstimator:
             rxns = []
             
             with Pool(n_proc) as p:
-                for res in p.imap_unordered(self.gen.generate, ((i, n_proc) for i in range(n_proc))):
+                for res in p.imap_unordered(
+                        partial(self.gen.generate, max_found=max_rxns), 
+                        ((i, n_proc) for i in range(n_proc))):
                     rxns.extend(res)
         else:
             rxns = self.gen.generate(max_found=max_rxns)
@@ -130,4 +133,4 @@ class EnthalpyEstimator:
 
 if __name__ == '__main__':
     est = EnthalpyEstimator('m1_00_91-20-3_C10H8_', 'c1c2ccccc2ccc1', isodesmic=True)
-    est.run(max_rxns=2000, mp=True)
+    est.run(max_rxns=2500, mp=True)

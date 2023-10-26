@@ -73,7 +73,7 @@ class ReactionGenerator:
                         last = vec_nums.pop()
                         i += 1
                     vec_nums.append(last+1)
-
+                    
         return S
 
     @staticmethod
