@@ -10,7 +10,7 @@ import reference
 class ReactionGenerator:
     def __init__(self, species_to_solve, smi, isodesmic=True):
         self.isodesmic = isodesmic
-        self.smiles = [species_to_solve] + [s for s in smi.values() if s != '']
+        self.smiles = [species_to_solve] + [s for s in smi if s != '']
         self.mols = {s:Chem.AddHs(Chem.MolFromSmiles(s)) for s in self.smiles}
         
         atomic_nums = sorted(set([atom.GetAtomicNum() for mol in self.mols.values() 
@@ -94,12 +94,12 @@ class ReactionGenerator:
 
         s = ''
         s += '+'.join(
-                '*'.join(
+                ''.join(
                     filter(None, [self.coef_to_str(c), self.vector_to_str(self.basis[r])])) 
                 for (r, c) in reagents)
         s += '->'
         s += '+'.join(
-                '*'.join(
+                ''.join(
                     filter(None, [self.coef_to_str(-c), self.vector_to_str(self.basis[r])])) 
                 for (r, c) in products)
 
@@ -111,12 +111,12 @@ class ReactionGenerator:
 
         s = ''
         s += '+'.join(
-                '*'.join(
+                ''.join(
                     filter(None, [self.coef_to_str(c), self.smiles[r]])) 
                 for (r, c) in reagents)
         s += '->'
         s += '+'.join(
-                '*'.join(
+                ''.join(
                     filter(None, [self.coef_to_str(-c), self.smiles[r]])) 
                 for (r, c) in products)
 
